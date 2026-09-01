@@ -11,15 +11,22 @@ hop, no separate daemon to run, and in a clustered ePHPm deployment the store is
 ## Requirements
 
 - PHP **8.2+**
-- The application must be served by an **ePHPm** binary. The `ephpm_kv_*`
-  functions are provided by the SAPI and are available in both FPM-style and
-  worker (long-lived) request modes. Outside ePHPm the constructors throw a
-  `RuntimeException`.
+- The application must be served by an **ePHPm** binary — any tagged release
+  works (the `ephpm_kv_*` functions have shipped since ePHPm v0.1.0;
+  `ephpm_kv_flush_all()`, used by `clear()`, since v0.1.2; current release:
+  v0.8.6). The functions are provided by the SAPI and are available in both
+  FPM-style and worker (long-lived) request modes. Outside ePHPm the
+  constructors throw a `RuntimeException`.
 
 ## Installation
 
+ePHPm packages are distributed via their GitHub repositories, not Packagist.
+Add this repo as a Composer `vcs` repository, then require the package
+(`ephpm/cache` is tagged, so `^0.1` resolves):
+
 ```bash
-composer require ephpm/cache
+composer config repositories.ephpm/cache vcs https://github.com/ephpm/cache
+composer require ephpm/cache:^0.1
 ```
 
 This package `provide`s `psr/simple-cache-implementation` and
