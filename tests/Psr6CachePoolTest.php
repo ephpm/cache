@@ -7,7 +7,6 @@ namespace Ephpm\Cache\Tests;
 use DateInterval;
 use DateTimeImmutable;
 use Ephpm\Cache\Exception\InvalidArgumentException;
-use Ephpm\Cache\Exception\UnsupportedOperationException;
 use Ephpm\Cache\Psr6\CacheItem;
 use Ephpm\Cache\Psr6\CachePool;
 use PHPUnit\Framework\TestCase;
@@ -90,7 +89,7 @@ final class Psr6CachePoolTest extends TestCase
         $this->pool->save($this->pool->getItem('a')->set(1));
         $this->pool->save($this->pool->getItem('b')->set(2));
 
-        $items = $this->pool->getItems(['a', 'b', 'c']);
+        $items = \iterator_to_array($this->pool->getItems(['a', 'b', 'c']));
         self::assertTrue($items['a']->isHit());
         self::assertTrue($items['b']->isHit());
         self::assertFalse($items['c']->isHit());
@@ -141,10 +140,74 @@ final class Psr6CachePoolTest extends TestCase
         $this->pool->getItem('bad@key');
     }
 
-    public function testClearThrowsUnsupported(): void
+    public function testClearIsNoopReturningFalseAndWarns(): void
     {
-        $this->expectException(UnsupportedOperationException::class);
-        $this->pool->clear();
+        $this->pool->save($this->pool->getItem('kept')->set('v'));
+
+        $warning = null;
+        \set_error_handler(static function (int $errno, string $errstr) use (&$warning): bool {
+            $warning = [$errno, $errstr];
+
+            return true; // swallow so PHPUnit's failOnWarning does not trip
+        });
+
+        try {
+            $result = $this->pool->clear();
+        } finally {
+            \restore_error_handler();
+        }
+
+        self::assertFalse($result, 'clear() must return false (no per-namespace flush available).');
+        self::assertNotNull($warning, 'clear() must emit a warning.');
+        self::assertSame(\E_USER_WARNING, $warning[0]);
+
+        // Persisted items survive the no-op...
+        self::assertTrue($this->pool->hasItem('kept'));
+    }
+
+    public function testClearDropsDeferredButNotPersistedItems(): void
+    {
+        $this->pool->save($this->pool->getItem('persisted')->set('p'));
+        $this->pool->saveDeferred($this->pool->getItem('pending')->set('q'));
+
+        // Swallow the expected warning.
+        \set_error_handler(static fn (): bool => true);
+
+        try {
+            self::assertFalse($this->pool->clear());
+        } finally {
+            \restore_error_handler();
+        }
+
+        // Deferred-but-uncommitted items are private to the pool, so clear()
+        // safely drops them; persisted items remain.
+        self::assertFalse($this->pool->hasItem('pending'));
+        self::assertTrue($this->pool->hasItem('persisted'));
+    }
+
+    public function testSetDoesNotFlipIsHitOnAMissedItem(): void
+    {
+        // Per PSR-6, set() must not make isHit() report true; the item is only a
+        // hit once persisted and re-fetched.
+        $item = $this->pool->getItem('fresh');
+        self::assertFalse($item->isHit());
+
+        $item->set('value');
+        self::assertFalse($item->isHit(), 'set() must not flip isHit() on a previously-missed item.');
+
+        $this->pool->save($item);
+        self::assertTrue($this->pool->getItem('fresh')->isHit());
+    }
+
+    public function testExpiredDeferredItemIsNotAHit(): void
+    {
+        $past = (new DateTimeImmutable())->modify('-10 seconds');
+        $item = $this->pool->getItem('stale')->set('v')->expiresAt($past);
+        self::assertTrue($this->pool->saveDeferred($item));
+
+        // An expired deferred item must read as absent, even before commit.
+        self::assertFalse($this->pool->hasItem('stale'));
+        self::assertFalse($this->pool->getItem('stale')->isHit());
     }
 
     public function testNamespaceIsolationFromPsr16(): void

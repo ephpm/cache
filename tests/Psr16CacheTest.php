@@ -6,7 +6,6 @@ namespace Ephpm\Cache\Tests;
 
 use DateInterval;
 use Ephpm\Cache\Exception\InvalidArgumentException;
-use Ephpm\Cache\Exception\UnsupportedOperationException;
 use Ephpm\Cache\Psr16\Cache;
 use PHPUnit\Framework\TestCase;
 
@@ -73,9 +72,30 @@ final class Psr16CacheTest extends TestCase
     {
         self::assertTrue($this->cache->setMultiple(['a' => 1, 'b' => 2, 'c' => 3]));
 
-        $out = $this->cache->getMultiple(['a', 'b', 'missing'], 'D');
+        $out = \iterator_to_array($this->cache->getMultiple(['a', 'b', 'missing'], 'D'));
 
         self::assertSame(['a' => 1, 'b' => 2, 'missing' => 'D'], $out);
+    }
+
+    public function testGetMultiplePreservesNumericStringKeys(): void
+    {
+        $out = $this->cache->getMultiple(['123']);
+
+        foreach ($out as $key => $value) {
+            self::assertSame('123', $key, 'A numeric-string key must not be coerced to int.');
+            self::assertNull($value);
+        }
+    }
+
+    public function testSetMultipleRejectsNonStringKeyFromGenerator(): void
+    {
+        $values = static function (): \Generator {
+            yield 'ok' => 'v';
+            yield 2.5 => 'bad'; // a Generator can smuggle a non-int/string key
+        };
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->cache->setMultiple($values());
     }
 
     public function testDeleteMultiple(): void
@@ -139,10 +159,30 @@ final class Psr16CacheTest extends TestCase
         self::assertInstanceOf(\Psr\Cache\InvalidArgumentException::class, $e);
     }
 
-    public function testClearThrowsUnsupported(): void
+    public function testClearIsNoopReturningFalseAndWarns(): void
     {
-        $this->expectException(UnsupportedOperationException::class);
-        $this->cache->clear();
+        $this->cache->set('kept', 'v');
+
+        $warning = null;
+        \set_error_handler(static function (int $errno, string $errstr) use (&$warning): bool {
+            $warning = [$errno, $errstr];
+
+            return true; // swallow so PHPUnit's failOnWarning does not trip
+        });
+
+        try {
+            $result = $this->cache->clear();
+        } finally {
+            \restore_error_handler();
+        }
+
+        self::assertFalse($result, 'clear() must return false (no per-namespace flush available).');
+        self::assertNotNull($warning, 'clear() must emit a warning.');
+        self::assertSame(\E_USER_WARNING, $warning[0]);
+        self::assertStringContainsString('no-op', $warning[1]);
+
+        // The no-op must NOT have wiped the store.
+        self::assertTrue($this->cache->has('kept'));
     }
 
     public function testNamespaceIsolationFromPsr6(): void
