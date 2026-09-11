@@ -12,11 +12,11 @@ hop, no separate daemon to run, and in a clustered ePHPm deployment the store is
 
 - PHP **8.2+**
 - The application must be served by an **ePHPm** binary — any tagged release
-  works (the `ephpm_kv_*` functions have shipped since ePHPm v0.1.0;
-  `ephpm_kv_flush_all()`, used by `clear()`, since v0.1.2; current release:
-  v0.8.6). The functions are provided by the SAPI and are available in both
-  FPM-style and worker (long-lived) request modes. Outside ePHPm the
-  constructors throw a `RuntimeException`.
+  works (the `ephpm_kv_*` functions have shipped since ePHPm v0.1.0, and
+  `ephpm_kv_flush_all()` since v0.1.2; current release: v0.10.2). The functions
+  are provided by the SAPI and are available in both FPM-style and worker
+  (long-lived) request modes. Outside ePHPm the constructors throw a
+  `RuntimeException`.
 
 ## Installation
 
@@ -88,15 +88,22 @@ $pool->commit();
 
 Entries are namespaced under `psr6:`, disjoint from the PSR-16 cache.
 
-## Important: `clear()` is intentionally unsupported
+## Important: `clear()` is intentionally a no-op
 
-Both `Psr16\Cache::clear()` and `Psr6\CachePool::clear()` **throw
-`Ephpm\Cache\Exception\UnsupportedOperationException`**.
+Both `Psr16\Cache::clear()` and `Psr6\CachePool::clear()` **do nothing, return
+`false`, and emit an `E_USER_WARNING`**. (PSR-6's `clear()` additionally drops
+this pool instance's own not-yet-committed deferred items, which are private to
+it and safe to discard.)
 
 The ePHPm SAPI exposes only `ephpm_kv_flush_all()`, which wipes the **entire
 shared store** -- that includes your PHP sessions and every other namespace, not
 just this cache. Silently calling it to satisfy a per-namespace `clear()` would
-be a data-loss footgun, so we refuse.
+be a data-loss footgun, so we refuse to.
+
+Returning `false` (rather than throwing) keeps the methods within their PSR
+`: bool` contract, so generic PSR-6/PSR-16 consumers — and the official
+`cache/integration-tests` compliance suite — don't blow up on a call they treat
+as routine; the warning makes the no-op visible in logs.
 
 To evict cache entries, either:
 
@@ -125,8 +132,8 @@ framework:
                 adapter: Ephpm\Cache\Psr6\CachePool
 ```
 
-Note: Symfony's `cache:pool:clear` will surface the
-`UnsupportedOperationException`. Prefer explicit key deletion or TTLs.
+Note: Symfony's `cache:pool:clear` will be a no-op here (it returns `false` and
+logs a warning rather than clearing). Prefer explicit key deletion or TTLs.
 
 ### Laravel
 
@@ -158,7 +165,11 @@ vendor/bin/phpunit
 
 The test suite ships in-memory fakes for the `ephpm_kv_*` functions (see
 `tests/bootstrap.php`), so the full cache logic can be exercised on a stock PHP
-CLI without an ePHPm binary.
+CLI without an ePHPm binary. Alongside the package's own unit tests, it runs the
+official [`cache/integration-tests`](https://github.com/php-cache/integration-tests)
+PSR-16 and PSR-6 compliance suites (`tests/Compliance/`) against these fakes;
+the only skipped cases are the `clear()`-dependent ones described above, each
+skipped with a documented reason.
 
 ## License
 

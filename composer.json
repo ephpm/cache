@@ -23,6 +23,7 @@
         "psr/cache": "^3.0"
     },
     "require-dev": {
+        "cache/integration-tests": "^1.0",
         "phpunit/phpunit": "^10"
     },
     "provide": {

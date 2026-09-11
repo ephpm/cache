@@ -55,9 +55,11 @@ final class CacheItem implements CacheItemInterface
     public function set(mixed $value): static
     {
         $this->value = $value;
-        // Setting a value marks the item as present for subsequent reads on
-        // this in-memory instance, per common PSR-6 implementation behaviour.
-        $this->isHit = true;
+
+        // Per PSR-6, isHit() reflects whether the item was found in the pool at
+        // fetch time; set()ing a value must NOT flip a previously-missed item to
+        // a hit. The item only becomes a hit once it has been persisted and
+        // re-fetched (or surfaced from the pool's deferred queue).
 
         return $this;
     }
@@ -107,5 +109,23 @@ final class CacheItem implements CacheItemInterface
     public function rawValue(): mixed
     {
         return $this->value;
+    }
+
+    /**
+     * Return a copy of this item with an explicit hit state.
+     *
+     * The pool uses this to surface a still-deferred (uncommitted) item as a
+     * hit — an item that logically lives in the pool even though it has not yet
+     * been flushed to the backing store — without {@see set()} itself having to
+     * lie about {@see isHit()}.
+     *
+     * @internal Consumed by {@see CachePool}.
+     */
+    public function withHitState(bool $isHit): static
+    {
+        $clone = clone $this;
+        $clone->isHit = $isHit;
+
+        return $clone;
     }
 }
