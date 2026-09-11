@@ -42,5 +42,10 @@
     },
     "config": {
         "sort-packages": true
+    },
+    "extra": {
+        "ephpm": {
+            "comment": "stubs/ephpm-kv.stub.php is an IDE/static-analysis stub ONLY. It is intentionally NOT listed in autoload.files: at runtime the global ephpm_kv_* functions are provided natively by the ePHPm engine, and autoloading the stub would redefine them and fatal. Point your analyzer (PhpStorm, Psalm, PHPStan) at the stubs/ directory instead."
+        }
     }
 }

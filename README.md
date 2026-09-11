@@ -171,6 +171,23 @@ PSR-16 and PSR-6 compliance suites (`tests/Compliance/`) against these fakes;
 the only skipped cases are the `clear()`-dependent ones described above, each
 skipped with a documented reason.
 
+## IDE / static analysis stubs
+
+The `ephpm_kv_*` functions this package calls are registered natively by the
+ePHPm engine, so they are invisible to IDEs and static analysers on a normal
+dev machine. `stubs/ephpm-kv.stub.php` declares every one of them
+(`ephpm_kv_get`, `set`, `setnx`, `del`, `exists`, `incr`, `decr`, `incr_by`,
+`expire`, `ttl`, `pttl`, `flush_all`, `wait`) with its exact signature, return
+type, and TTL units, so PhpStorm/Psalm/PHPStan resolve the calls and stop
+flagging them as undefined.
+
+Point your analyzer at the `stubs/` directory (PhpStorm picks it up
+automatically; for Psalm/PHPStan add it to the scanned/stub paths). The stub is
+**not** autoloaded and must never be `require`d at runtime — the real functions
+already exist inside ePHPm, and loading the stub would redefine them and fatal.
+This mirrors how [`ephpm/db`](https://github.com/ephpm/db) ships
+`stubs/ephpm-db.stub.php`.
+
 ## License
 
 MIT -- see [LICENSE](LICENSE).
