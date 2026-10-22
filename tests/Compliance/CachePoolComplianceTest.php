@@ -16,7 +16,7 @@ use Psr\Cache\CacheItemPoolInterface;
  *
  * @see \Cache\IntegrationTests\CachePoolTest
  */
-final class CachePoolComplianceTest extends CachePoolTest
+class CachePoolComplianceTest extends CachePoolTest
 {
     protected function setUp(): void
     {

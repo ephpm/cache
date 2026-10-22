@@ -37,13 +37,35 @@ final class KvBackend
     private const RESERVED_CHARACTERS = '{}()/\\@:';
 
     /**
-     * @param non-empty-string $prefix Namespace prepended to every key handed
-     *                                 to the KV store (e.g. `psr16:`).
+     * Whether `ephpm_kv_mget()` (ePHPm v0.13.0+) is used for multi-key reads.
+     */
+    private readonly bool $useMget;
+
+    /**
+     * Whether `ephpm_kv_mset()` (ePHPm v0.13.0+) is used for multi-key writes.
+     */
+    private readonly bool $useMset;
+
+    /**
+     * @param non-empty-string $prefix          Namespace prepended to every key
+     *                                          handed to the KV store (e.g.
+     *                                          `psr16:`).
+     * @param bool             $batchFunctions  Use the batched
+     *                                          `ephpm_kv_mget()` /
+     *                                          `ephpm_kv_mset()` when the
+     *                                          runtime provides them (ePHPm
+     *                                          v0.13.0+). Each is feature-
+     *                                          detected; on older runtimes the
+     *                                          per-key path is used. Pass false
+     *                                          to force the per-key path.
      */
     public function __construct(
         private readonly string $prefix,
+        bool $batchFunctions = true,
     ) {
         $this->assertAvailable();
+        $this->useMget = $batchFunctions && \function_exists('ephpm_kv_mget');
+        $this->useMset = $batchFunctions && \function_exists('ephpm_kv_mset');
     }
 
     /**
@@ -147,6 +169,108 @@ final class KvBackend
             $this->serialize($value),
             $seconds ?? 0,
         );
+    }
+
+    /**
+     * Fetch several values at once, returning a list aligned with `$keys`
+     * (same order, same count) in which a miss is the sentinel `$missing`.
+     *
+     * Every key is validated before anything is read. On ePHPm v0.13.0+ this
+     * is a single `ephpm_kv_mget()` call; otherwise (or if that call fails)
+     * each key is read with `ephpm_kv_get()`, exactly as {@see get()} does.
+     *
+     * @template T
+     *
+     * @param list<string> $keys
+     * @param T            $missing
+     *
+     * @return list<mixed|T>
+     */
+    public function getMany(array $keys, mixed $missing = null): array
+    {
+        $keys = \array_values($keys);
+        $storageKeys = \array_map($this->storageKey(...), $keys);
+
+        if ($storageKeys === []) {
+            return [];
+        }
+
+        if ($this->useMget) {
+            $raws = ephpm_kv_mget($storageKeys);
+
+            if (\is_array($raws) && \count($raws) === \count($storageKeys)) {
+                $values = [];
+                foreach (\array_values($raws) as $raw) {
+                    $values[] = $raw === null ? $missing : $this->unserialize($raw);
+                }
+
+                return $values;
+            }
+            // false (failure) — fall through to the per-key path, which
+            // reports misses exactly as the pre-v0.13 behaviour did.
+        }
+
+        $values = [];
+        foreach ($keys as $key) {
+            $values[] = $this->get($key, $missing);
+        }
+
+        return $values;
+    }
+
+    /**
+     * Store several values with one shared TTL.
+     *
+     * Every key is validated before anything is written. On ePHPm v0.13.0+
+     * this is a single `ephpm_kv_mset()` call; otherwise each entry is written
+     * with `ephpm_kv_set()`. A later duplicate key wins, as with sequential
+     * writes. Serialisation and TTL semantics are identical to {@see set()}.
+     *
+     * @param list<array{0: string, 1: mixed}> $entries [caller key, value] pairs
+     *                                                  (a list, so numeric-string
+     *                                                  keys stay strings)
+     * @param null|int|DateInterval            $ttl     null / non-positive means
+     *                                                  "no expiry" as in set();
+     *                                                  an already-expired
+     *                                                  interval deletes
+     */
+    public function setMany(array $entries, null|int|DateInterval $ttl = null): bool
+    {
+        $seconds = $this->normalizeTtl($ttl);
+
+        /** @var array<array-key, mixed> $map storage key => unserialised value */
+        $map = [];
+        foreach ($entries as [$key, $value]) {
+            $map[$this->storageKey($key)] = $value;
+        }
+
+        if ($map === []) {
+            return true;
+        }
+
+        if ($seconds !== null && $seconds <= 0) {
+            foreach (\array_keys($map) as $storageKey) {
+                ephpm_kv_del((string) $storageKey);
+            }
+
+            return true;
+        }
+
+        if ($this->useMset) {
+            $serialised = [];
+            foreach ($map as $storageKey => $value) {
+                $serialised[$storageKey] = $this->serialize($value);
+            }
+
+            return ephpm_kv_mset($serialised, $seconds ?? 0);
+        }
+
+        $ok = true;
+        foreach ($map as $storageKey => $value) {
+            $ok = ephpm_kv_set((string) $storageKey, $this->serialize($value), $seconds ?? 0) && $ok;
+        }
+
+        return $ok;
     }
 
     /**
