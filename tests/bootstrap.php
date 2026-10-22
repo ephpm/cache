@@ -34,9 +34,30 @@ if (!function_exists('ephpm_kv_get')) {
         /** @var array<string, array{value: string, expires: int|null}> */
         public static array $store = [];
 
+        /**
+         * Calls made to the batched v0.13.0+ fakes, by function name — lets
+         * tests prove which path (batched or per-key) was taken.
+         *
+         * @var array<string, int>
+         */
+        public static array $calls = [];
+
+        /**
+         * When true, the ephpm_kv_mget() fake returns false (simulated SAPI
+         * failure) so the per-key recovery path can be exercised.
+         */
+        public static bool $failMget = false;
+
         public static function reset(): void
         {
             self::$store = [];
+            self::$calls = [];
+            self::$failMget = false;
+        }
+
+        public static function record(string $function): void
+        {
+            self::$calls[$function] = (self::$calls[$function] ?? 0) + 1;
         }
 
         public static function alive(string $key): bool
@@ -153,7 +174,46 @@ if (!function_exists('ephpm_kv_get')) {
 
     function ephpm_kv_flush_all(): bool
     {
-        EphpmKvFake::reset();
+        EphpmKvFake::$store = [];
+
+        return true;
+    }
+
+    // ── ePHPm v0.13.0+ batched functions ────────────────────────────────────
+    // The package feature-detects these; KvBackend's `$batchFunctions = false`
+    // switch exercises the pre-v0.13 per-key path against the same fakes.
+
+    /**
+     * @param list<string> $keys
+     *
+     * @return list<string|null>|false
+     */
+    function ephpm_kv_mget(array $keys): array|false
+    {
+        EphpmKvFake::record('mget');
+
+        if (EphpmKvFake::$failMget) {
+            return false;
+        }
+
+        $out = [];
+        foreach ($keys as $key) {
+            $out[] = ephpm_kv_get((string) $key);
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param array<array-key, string> $values
+     */
+    function ephpm_kv_mset(array $values, int $ttl = 0): bool
+    {
+        EphpmKvFake::record('mset');
+
+        foreach ($values as $key => $value) {
+            ephpm_kv_set((string) $key, (string) $value, $ttl);
+        }
 
         return true;
     }

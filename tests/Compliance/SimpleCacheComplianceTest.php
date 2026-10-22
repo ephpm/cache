@@ -16,7 +16,7 @@ use Psr\SimpleCache\CacheInterface;
  *
  * @see \Cache\IntegrationTests\SimpleCacheTest
  */
-final class SimpleCacheComplianceTest extends SimpleCacheTest
+class SimpleCacheComplianceTest extends SimpleCacheTest
 {
     protected function setUp(): void
     {

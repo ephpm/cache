@@ -94,22 +94,30 @@ final class Cache implements CacheInterface
 
         // Yield through a generator so a numeric-string key like '123' is
         // preserved as a string instead of being coerced to an int array key.
+        // The read is one ephpm_kv_mget() on ePHPm v0.13.0+, per key otherwise.
         return (function () use ($validated, $default): \Generator {
-            foreach ($validated as $key) {
-                yield $key => $this->get($key, $default);
+            $values = $this->backend->getMany($validated, $this->miss);
+
+            foreach ($validated as $i => $key) {
+                yield $key => $values[$i] === $this->miss ? $default : $values[$i];
             }
         })();
     }
 
+    /**
+     * Every key is validated before anything is written. All entries share one
+     * TTL, so on ePHPm v0.13.0+ this is a single `ephpm_kv_mset()` call; older
+     * runtimes write each entry with `ephpm_kv_set()`.
+     */
     public function setMultiple(iterable $values, null|int|DateInterval $ttl = null): bool
     {
-        $ok = true;
+        $entries = [];
 
         foreach ($values as $key => $value) {
-            $ok = $this->set($this->normalizeMultiKey($key), $value, $ttl) && $ok;
+            $entries[] = [$this->normalizeMultiKey($key), $value];
         }
 
-        return $ok;
+        return $this->backend->setMany($entries, $ttl ?? $this->defaultTtl);
     }
 
     /**

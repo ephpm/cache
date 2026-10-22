@@ -17,6 +17,11 @@ hop, no separate daemon to run, and in a clustered ePHPm deployment the store is
   are provided by the SAPI and are available in both FPM-style and worker
   (long-lived) request modes. Outside ePHPm the constructors throw a
   `RuntimeException`.
+- **ePHPm v0.13.0+ is faster, not required.** On v0.13.0+ the multi-key
+  operations use the batched `ephpm_kv_mget()` / `ephpm_kv_mset()` (see
+  [Batched multi-key operations](#batched-multi-key-operations)). Each is
+  feature-detected with `function_exists()`; on older ePHPm the package uses
+  the per-key path exactly as before.
 
 ## Installation
 
@@ -88,6 +93,32 @@ $pool->commit();
 
 Entries are namespaced under `psr6:`, disjoint from the PSR-16 cache.
 
+## Batched multi-key operations
+
+On ePHPm **v0.13.0+** the multi-key calls go to the store in one SAPI call
+instead of one per key:
+
+| Call | ePHPm v0.13.0+ | Older ePHPm |
+|------|----------------|-------------|
+| PSR-16 `getMultiple()` | one `ephpm_kv_mget()` | `ephpm_kv_get()` per key |
+| PSR-16 `setMultiple()` | one `ephpm_kv_mset()` (every entry shares the call's TTL) | `ephpm_kv_set()` per key |
+| PSR-6 `getItems()` | one `ephpm_kv_mget()` for the keys with no pending deferred item | `ephpm_kv_get()` per key |
+| PSR-6 `commit()` | one `ephpm_kv_mset()` per distinct remaining TTL | `ephpm_kv_set()` per item |
+| `deleteMultiple()` / `deleteItems()` | `ephpm_kv_del()` per key (no multi-key delete exists) | same |
+
+Values are serialized exactly as for the single-key calls, and TTL handling is
+unchanged (an already-expired TTL still deletes instead of storing).
+`setMultiple()` now validates every key before writing anything, so an invalid
+key no longer leaves the keys before it written. If `ephpm_kv_mget()` reports
+a failure, the read falls back to the per-key path. `ephpm_kv_mset()` is not
+atomic: if the store refuses a write part-way (memory limit) it returns
+`false` with the earlier keys already stored, and `setMultiple()`/`commit()`
+return `false`, the same outcome as a refused per-key write.
+
+To force the per-key path (e.g. while comparing behaviour), construct the
+backend yourself: `new Cache(null, new KvBackend('psr16:', batchFunctions: false))`
+or `new CachePool(new KvBackend('psr6:', batchFunctions: false))`.
+
 ## Important: `clear()` is intentionally a no-op
 
 Both `Psr16\Cache::clear()` and `Psr6\CachePool::clear()` **do nothing, return
@@ -110,8 +141,12 @@ To evict cache entries, either:
 - delete specific keys (`delete()` / `deleteItem()` / `deleteMultiple()`), or
 - give entries a TTL so they self-evict.
 
-A future ePHPm SAPI that exposes a prefix-scan or key index would let us
-implement a scoped `clear()`; until then, honesty beats a destructive surprise.
+ePHPm v0.13.0 adds `ephpm_kv_scan()`, but it is not a basis for a scoped
+`clear()`: in a cluster it lists only **this node's** keyspace, and string
+values larger than `[cluster.kv] small_key_threshold` live only on their
+replica nodes, so a scan-and-delete would silently miss entries. Until the
+SAPI offers a complete prefix delete, honesty beats a destructive (or
+incomplete) surprise.
 
 ## Framework configuration
 
@@ -167,19 +202,30 @@ The test suite ships in-memory fakes for the `ephpm_kv_*` functions (see
 `tests/bootstrap.php`), so the full cache logic can be exercised on a stock PHP
 CLI without an ePHPm binary. Alongside the package's own unit tests, it runs the
 official [`cache/integration-tests`](https://github.com/php-cache/integration-tests)
-PSR-16 and PSR-6 compliance suites (`tests/Compliance/`) against these fakes;
-the only skipped cases are the `clear()`-dependent ones described above, each
-skipped with a documented reason.
+PSR-16 and PSR-6 compliance suites (`tests/Compliance/`) against these fakes —
+twice each: once on the batched v0.13.0+ path and once with it switched off
+(the per-key path older ePHPm takes). The only skipped cases are the
+`clear()`-dependent ones described above, each skipped with a documented
+reason.
 
 ## IDE / static analysis stubs
 
 The `ephpm_kv_*` functions this package calls are registered natively by the
 ePHPm engine, so they are invisible to IDEs and static analysers on a normal
-dev machine. `stubs/ephpm-kv.stub.php` declares every one of them
-(`ephpm_kv_get`, `set`, `setnx`, `del`, `exists`, `incr`, `decr`, `incr_by`,
-`expire`, `ttl`, `pttl`, `flush_all`, `wait`) with its exact signature, return
-type, and TTL units, so PhpStorm/Psalm/PHPStan resolve the calls and stop
-flagging them as undefined.
+dev machine. `stubs/ephpm-kv.stub.php` declares the whole `ephpm_kv_*` surface
+with its exact signature, return type, failure value and TTL units, so
+PhpStorm/Psalm/PHPStan resolve the calls and stop flagging them as undefined:
+
+- **All ePHPm versions with KV:** `get`, `set`, `setnx`, `del`, `del_if_eq`
+  (v0.11.x+), `exists`, `incr`, `decr`, `incr_by`, `expire`, `ttl`, `pttl`,
+  `flush_all`, `wait`.
+- **ePHPm v0.13.0+ only** (feature-detect with `function_exists()`):
+  hashes — `hget`, `hset`, `hsetnx`, `hmget`, `hgetall`, `hdel`, `hexists`,
+  `hlen`, `hkeys`, `hvals`, `hincr_by`, `hexpire`, `httl`, `hpttl`,
+  `hpersist`; strings and keys — `mget`, `mset`, `getdel`, `getex`,
+  `persist`, `set_if_eq`, `append`, `strlen`, `type`, `scan`. On v0.13.0+
+  `expire`/`ttl`/`pttl` also work on hash keys and `wait` also wakes on hash
+  writes.
 
 Point your analyzer at the `stubs/` directory (PhpStorm picks it up
 automatically; for Psalm/PHPStan add it to the scanned/stub paths). The stub is

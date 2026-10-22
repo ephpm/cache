@@ -84,8 +84,34 @@ final class CachePool implements CacheItemPoolInterface
         // ...then yield through a generator so a numeric-string key like '123'
         // is preserved as a string instead of being coerced to an int key.
         return (function () use ($keys): \Generator {
+            // Keys with a pending deferred item are answered from it (see
+            // getItem()); the rest are read from the store in one batch — a
+            // single ephpm_kv_mget() on ePHPm v0.13.0+, per key otherwise.
+            $fromStore = [];
             foreach ($keys as $key) {
-                yield $key => $this->getItem($key);
+                if (!isset($this->deferred[$key])) {
+                    $fromStore[] = $key;
+                }
+            }
+
+            $sentinel = self::miss();
+            $stored = [];
+            foreach ($this->backend->getMany($fromStore, $sentinel) as $i => $value) {
+                $stored[$fromStore[$i]] = $value;
+            }
+
+            foreach ($keys as $key) {
+                if (!\array_key_exists($key, $stored)) {
+                    yield $key => $this->getItem($key);
+
+                    continue;
+                }
+
+                $value = $stored[$key];
+
+                yield $key => $value === $sentinel
+                    ? new CacheItem($key, null, false)
+                    : new CacheItem($key, $value, true);
             }
         })();
     }
@@ -192,15 +218,39 @@ final class CachePool implements CacheItemPoolInterface
         return true;
     }
 
+    /**
+     * Persist every deferred item.
+     *
+     * Items are grouped by remaining TTL and each group is written with one
+     * {@see KvBackend::setMany()} call — a single `ephpm_kv_mset()` per group on
+     * ePHPm v0.13.0+, one `ephpm_kv_set()` per item on older runtimes. Items
+     * whose expiry has already lapsed are deleted rather than stored, exactly
+     * as {@see save()} does.
+     */
     public function commit(): bool
     {
         $ok = true;
 
+        /** @var array<int, list<array{0: string, 1: mixed}>> $groups TTL seconds (0 = none) => entries */
+        $groups = [];
+
         foreach ($this->deferred as $item) {
-            $ok = $this->save($item) && $ok;
+            $ttl = $item->ttlSeconds();
+
+            if ($ttl !== null && $ttl <= 0) {
+                $ok = $this->backend->delete($item->getKey()) && $ok;
+
+                continue;
+            }
+
+            $groups[$ttl ?? 0][] = [$item->getKey(), $item->rawValue()];
         }
 
         $this->deferred = [];
+
+        foreach ($groups as $ttl => $entries) {
+            $ok = $this->backend->setMany($entries, $ttl === 0 ? null : $ttl) && $ok;
+        }
 
         return $ok;
     }
