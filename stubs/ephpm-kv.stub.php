@@ -160,10 +160,13 @@ function ephpm_kv_incr_by(string $key, int $delta): int|false
  * Since ePHPm v0.13.0 this also works on **hash** keys (whole-key TTL; per-field
  * TTLs are {@see ephpm_kv_hexpire()}); older versions only see string keys.
  *
- * @param int $ttl expiry in **seconds**; 0 or negative clears the deadline
+ * @param int $ttl expiry in **seconds**; must be positive. 0 or a negative value
+ *                 is refused: the call returns false and the key keeps its
+ *                 current TTL (unlike Redis, it does not delete the key). Use
+ *                 {@see ephpm_kv_persist()} to remove a TTL.
  *
- * @return bool true if the key existed and the TTL was applied, false if the
- *              key was missing
+ * @return bool true if the key existed and the TTL was applied; false if the
+ *              key was missing or $ttl was not positive
  */
 function ephpm_kv_expire(string $key, int $ttl): bool
 {
