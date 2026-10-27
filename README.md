@@ -13,7 +13,7 @@ hop, no separate daemon to run, and in a clustered ePHPm deployment the store is
 - PHP **8.2+**
 - The application must be served by an **ePHPm** binary — any tagged release
   works (the `ephpm_kv_*` functions have shipped since ePHPm v0.1.0, and
-  `ephpm_kv_flush_all()` since v0.1.2; current release: v0.10.2). The functions
+  `ephpm_kv_flush_all()` since v0.1.2; see the [ePHPm releases](https://github.com/ephpm/ephpm/releases) for the latest version). The functions
   are provided by the SAPI and are available in both FPM-style and worker
   (long-lived) request modes. Outside ePHPm the constructors throw a
   `RuntimeException`.
