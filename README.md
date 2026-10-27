@@ -27,11 +27,11 @@ hop, no separate daemon to run, and in a clustered ePHPm deployment the store is
 
 ePHPm packages are distributed via their GitHub repositories, not Packagist.
 Add this repo as a Composer `vcs` repository, then require the package
-(`ephpm/cache` is tagged, so `^0.1` resolves):
+(`ephpm/cache` is tagged `v0.2.0`, so `^0.2` resolves):
 
 ```bash
 composer config repositories.ephpm/cache vcs https://github.com/ephpm/cache
-composer require ephpm/cache:^0.1
+composer require ephpm/cache:^0.2
 ```
 
 This package `provide`s `psr/simple-cache-implementation` and
